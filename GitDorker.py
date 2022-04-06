@@ -67,6 +67,7 @@ queries_list = []
 organizations_list = []
 users_list = []
 keywords_list = []
+tokens_blocked = []
 
 # TOKEN ARGUMENT LOGIC
 if args.token:
@@ -135,9 +136,11 @@ n = -1
 def token_round_robin():
     global n
     n = n + 1
+    current_token = ""
     if n == len(tokens_list):
         n = 0
-    current_token = tokens_list[n]
+    if tokens_list[n] not in tokens_blocked:
+        current_token = tokens_list[n]
     return current_token
 
 
@@ -161,13 +164,18 @@ def api_search(url):
         sys.stdout.flush()
 
     stats_dict['n_current'] = stats_dict['n_current'] + 1
-    headers = {"Authorization": "token " + token_round_robin()}
+    stats_dict['n_current_counter'] = stats_dict['n_current_counter'] + 1
+    token = ""
+    while token == "":
+        token = token_round_robin()
+
+    headers = {"Authorization": "token " + token}
 
     try:
         r = requests.get(url, headers=headers)
         json = r.json()
         if args.limitbypass:
-            if stats_dict['n_current'] % requests_per_minute == 0:
+            if stats_dict['n_current_counter'] == requests_per_minute:
                 for remaining in range(63, 0, -1):
                     sys.stdout.write("\r")
                     sys.stdout.write(colored(
@@ -175,8 +183,10 @@ def api_search(url):
                             remaining), "blue"))
                     sys.stdout.flush()
                     time.sleep(1)
+                tokens_blocked.clear()
+                stats_dict['n_current_counter'] = 0
         else:
-            if stats_dict['n_current'] % 29 == 0:
+            if stats_dict['n_current_counter'] == 29:
                 for remaining in range(63, 0, -1):
                     sys.stdout.write("\r")
                     sys.stdout.write(colored(
@@ -184,11 +194,61 @@ def api_search(url):
                             remaining), "blue"))
                     sys.stdout.flush()
                     time.sleep(1)
-
+                tokens_blocked.clear()
+                stats_dict['n_current_counter'] = 0
         if 'documentation_url' in json:
-            print(colored("[-] error occurred: %s" % json['documentation_url'], 'red'))
+            stats_dict['n_current_blocked'] = stats_dict['n_current_counter']
+            #Debug
+            #print("\nBad request:")
+            #print(str(headers))
+            #print(str(json))
         else:
-            url_results_dict[url] = json['total_count']
+            #Debug
+            #print("\nGood request:")
+            #print(str(headers))
+            #print(str(json))
+            pass
+        while 'documentation_url' in json:
+            stats_dict['n_current_blocked'] = stats_dict['n_current_blocked'] + 1
+            tokens_blocked.append(token)
+            token = ""
+            if len(tokens_blocked) == len(tokens_list):
+                print(colored("\n[-] All %s tokens are blocked, waiting 30 seconds to unblock them and flush the list" % len(tokens_blocked), 'red'))
+                time.sleep(30)
+                tokens_blocked.clear()
+            while token == "":
+                token = token_round_robin()
+
+            headers = {"Authorization": "token " + token}
+            r = requests.get(url, headers=headers)
+            json = r.json()
+            #Debug
+            #print("\nAfter Bad request:")
+            #print(str(headers))
+            #print(str(json))
+            if args.limitbypass:
+                if stats_dict['n_current_blocked'] == requests_per_minute:
+                    for remaining in range(63, 0, -1):
+                        sys.stdout.write("\r")
+                        sys.stdout.write(colored(
+                            "\r[#] (-_-)zzZZzzZZzzZZzzZZ sleeping to avoid rate limits. GitDorker will resume soon (-_-)zzZZzzZZzzZZzzZZ | {:2d} seconds remaining.\r".format(
+                                remaining), "blue"))
+                        sys.stdout.flush()
+                        time.sleep(1)
+                    tokens_blocked.clear()
+                    stats_dict['n_current_counter'] = 0
+            else:
+                if stats_dict['n_current_blocked'] == 29:
+                    for remaining in range(63, 0, -1):
+                        sys.stdout.write("\r")
+                        sys.stdout.write(colored(
+                            "\r[#] (-_-)zzZZzzZZzzZZzzZZ sleeping to avoid rate limits. GitDorker will resume soon (-_-)zzZZzzZZzzZZzzZZ | {:2d} seconds remaining.\r".format(
+                                remaining), "blue"))
+                        sys.stdout.flush()
+                        time.sleep(1)
+                    tokens_blocked.clear()
+                    stats_dict['n_current_counter'] = 0
+        url_results_dict[url] = json['total_count']
 
     except Exception as e:
         print(colored("[-] error occurred: %s" % e, 'red'))
@@ -210,7 +270,9 @@ url_results_dict = {}
 stats_dict = {
     'l_tokens': len(tokens_list),
     'n_current': 0,
-    'n_total_urls': 0
+    'n_total_urls': 0,
+    'n_current_blocked': 0,
+    'n_current_counter': 0
 }
 
 # CREATE QUERIES
